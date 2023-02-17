@@ -2,6 +2,7 @@
 conf <- config::get()
 load.pkg("googlesheets4") # Google sheets
 load.pkg("googledrive") # Google drive
+load.pkg("httpuv") # Authentiation
 load.pkg("tidyverse") # Data manipulation
 
 # Google sheets authentication ---------
