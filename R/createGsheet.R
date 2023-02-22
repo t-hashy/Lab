@@ -23,6 +23,7 @@ names(df.raw) <- c("uid", "date", "name", "session", "amount", "way", "category"
 
 # year and yearmonth column and cumulatives
 df <- df.raw %>%
+  .[order(.$date),] %>%
   mutate(
     year = format(date, "%Y"),
     ym = as.yearmon(date),
@@ -56,6 +57,7 @@ df <- df.raw %>%
 
 # Set basics
 years <- unique(format(df$date, "%Y"))
+df.years <- data.frame()
 
 # Check each year
 for(year.this in years){
@@ -71,7 +73,7 @@ for(year.this in years){
     mutate(
       cash.cal = case_when(
         way != '立替' ~ pl.cal,
-        substitution_paid == TRUE ~ pl.cal,
+        isTRUE(substitution_paid) ~ pl.cal,
         .default = 0
       )
     ) %>%
@@ -86,7 +88,8 @@ for(year.this in years){
       .after = cash.all
     ) %>%
     select(uid, date, year, ym, name, session, amount, cum.all, cum.year, pl.all, pl.year, cash.all,cash.year, way, category, details, target, purpose, type, substitution_paid, substitution_paid_at) %>%
-    ungroup()
+    ungroup() %>%
+    .[order(.$date),]
 
   # Save the data to Google speradsheet
   df.this.toSave <- df.this %>%
@@ -96,12 +99,12 @@ for(year.this in years){
   write_sheet(df.this.toSave,conf$G_SSID_PERF, year.this)
 
   # Merge tables
-  df <- merge.data.frame(df, df.this, all.x = TRUE) %>%
+  df.years <- rbind(df.years, df.this) %>%
     select(uid, date, year, ym, name, session, amount, cum.all, cum.year, pl.all, pl.year, cash.all,cash.year, way, category, details, target, purpose, type, substitution_paid, substitution_paid_at)
 }
 
 # Update all time sheet ------------------
-df.toSave <- df %>%
+df.toSave <- df.years %>%
   mutate(
     ym = as.character(ym)
   )
@@ -112,13 +115,13 @@ sheet_rename(conf$G_SSID_PERF, allsht.old, allsht.new)
 write_sheet(df.toSave, conf$G_SSID_PERF, allsht.new)
 
 # Check the data ----------------
-plot <- ggplot(data = df) +
+plot <- ggplot(data = df.years) +
   geom_line(aes(ym, cum.all, color = paste(session,"_all", sep = ""))) +
-  geom_line(aes(ym, pl.all, color = "PL.all")) +
-  geom_line(aes(ym, cash.all, color = "Cash.all")) +
-  geom_line(aes(ym, cum.year, color = paste(session,"_year", sep = ""))) +
-  geom_line(aes(ym, pl.year, color = "PL.year")) +
-  geom_line(aes(ym, cash.year, color = "Cash.year")) +
+  geom_line(aes(ym, pl.all, color = "PL_all")) +
+  geom_line(aes(ym, cash.all, color = "Cash_all")) +
+  geom_line(aes(ym, cum.year, color = paste(session,"_", year, sep = ""))) +
+  geom_line(aes(ym, pl.year, color = paste("PL_", year, sep = ""))) +
+  geom_line(aes(ym, cash.year, color = paste("Cash_", year, sep = ""))) +
   geom_hline(yintercept = 0) +
   scale_y_continuous(labels = comma) +
   labs(
@@ -128,3 +131,50 @@ plot <- ggplot(data = df) +
     y = "amount(yen)"
   )
 ggplotly(plot)
+
+# Fix cash remaining and substitution paid data ------
+
+# Get the cash now
+cash.now.account <- conf$CASH_NOW
+cash.now.pl <- df.years$cash.all[length(df.years$cash.all)]
+
+# Check the difference between pl and real amount
+cash.lack <- cash.now.pl - cash.now.account
+
+# Extract the substitution unpaid data
+df.unpaid <- df.years %>%
+  filter(
+    substitution_paid == FALSE,
+    way == "立替"
+  ) %>%
+  select(uid, date, name, amount) %>%
+  mutate(
+    cum.all = cumsum(amount)
+  ) %>%
+  group_by(name) %>%
+  mutate(
+    cum.each = cumsum(amount)
+  ) %>%
+  ungroup()
+
+# Get the latest total unpaid amount -----
+unpaid.total <- max(df.unpaid$cum.all)
+names <- unique(df.unpaid$name)
+df.unpaid.check <- data.frame(
+ name = names
+) %>%
+  mutate(
+    unpaid.amount = map(names, function(name.this) df.unpaid$cum.each[df.unpaid$name == name.this] %>% max)
+  ) %>%
+  mutate(
+    unpaid.ratio = map(unpaid.amount, function(am) am / unpaid.total)
+  ) %>%
+  mutate(
+    to.fix = map(unpaid.ratio, function(am) ceiling(am * cash.lack))
+  )
+
+# Fix with substitution paid
+df.toFix <- df.unpaid %>%
+  mutate(
+    dist.each = cume_dist(cum.each)
+  )

@@ -60,6 +60,7 @@ load.pkg("RSQLite") # SQLite
 load.pkg("ggplot2") # Plot
 load.pkg("scales") # Plot formatting
 load.pkg("plotly") # Interactive plot
+load.pkg("GGally") # Multiple variables
 
 # Utility functions ----------
 generate_uid <- function(current.uids = list(), uid.len = 8){
