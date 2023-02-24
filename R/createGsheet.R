@@ -494,6 +494,7 @@ df.shaped <- df.shaped.base %>%
   ungroup()
 
 # See the data ----
+par(mfrow = c(2,1))
 plot <- ggplot(df.shaped)+
   geom_line(aes(date, pl_total, colour = "pl")) +
   geom_line(aes(date_paidat, cash_total, colour = ifelse(isPaid == "paid", "cash", "unpaid all"))) +
@@ -527,15 +528,6 @@ df.shaped.year <- df.shaped %>%
   ) %>%
   ungroup()
 
-# See the data -----
-plot <- ggplot(df.shaped.year) +
-  geom_line(aes(mon, pl_year, colour = paste("pl", year))) +
-  geom_line(aes(mon_paidat, cash_year, colour = paste("cash", isPaid, year_paidat))) +
-  geom_hline(yintercept = 0, colour = "black", alpha = 0.5, linetype = "solid") +
-  geom_hline(yintercept = 200000, colour = "black", alpha = 0.5, linetype = "dashed") +
-  scale_y_continuous(labels = comma, n.breaks = 10) +
-  scale_x_continuous(labels = label_number(accuracy = 1), limits = c(1,12))
-ggplotly(plot)
 
 ##
 # Add yearmonth column -----
@@ -563,6 +555,50 @@ df.shaped.ym <- df.shaped.year %>%
   ungroup()
 ##
 
+
+# See the data -----
+df.agr.pl <- df.shaped.ym %>%
+  group_by(year,mon, yearmon) %>%
+  summarise(
+    pl_mon = sum(cal.amount.pl)
+  ) %>%
+  ungroup() %>%
+  group_by(year) %>%
+  mutate(
+    pl_year = cumsum(pl_mon),
+    .before = pl_mon
+  ) %>%
+  ungroup() %>%
+  mutate(
+    pl_total = cumsum(pl_mon),
+    .before = pl_year
+  )
+df.agr.cf <- df.shaped.ym %>%
+  group_by(year_paidat,mon_paidat, yearmon_paidat) %>%
+  summarise(
+    cf_mon = sum(cal.amount.pl)
+  ) %>%
+  ungroup() %>%
+  group_by(year_paidat) %>%
+  mutate(
+    cf_year = cumsum(cf_mon),
+    .before = cf_mon
+  ) %>%
+  ungroup() %>%
+  mutate(
+    cf_total = cumsum(cf_mon),
+    .before = cf_year
+  )
+df.agr <- merge.data.frame(df.agr.pl, df.agr.cf, by.x = c("year", "mon", "yearmon"), by.y = c("year_paidat", "mon_paidat", "yearmon_paidat"))
+plot <-
+  ggplot(df.agr) +
+  geom_line(aes(mon, pl_year, colour = paste("pl", year), title = "color")) +
+  geom_line(aes(mon, cf_year, colour = paste("cf", year))) +
+  geom_hline(yintercept = 0, colour = "black", alpha = 0.5, linetype = "solid") +
+  geom_hline(yintercept = 200000, colour = "black", alpha = 0.5, linetype = "dashed") +
+  scale_y_continuous(labels = comma, n.breaks = 10, name = "amount_yen") +
+  scale_x_continuous(labels = label_number(accuracy = 1), limits = c(1,12), name = "month")
+ggplotly(plot)
 
 ### FINIAL PUSH ### ----
 
