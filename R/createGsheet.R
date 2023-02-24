@@ -496,11 +496,11 @@ df.shaped <- df.shaped.base %>%
 # See the data ----
 plot <- ggplot(df.shaped)+
   geom_line(aes(date, pl_total, colour = "pl")) +
-  geom_line(aes(date_paidat, cash_total, colour = isPaid)) +
+  geom_line(aes(date_paidat, cash_total, colour = ifelse(isPaid == "paid", "cash", "unpaid all"))) +
   geom_line(aes(date, unpaid_each , colour = paste("unpaid", name)), na.rm = TRUE, data = df.shaped %>% filter(isPaid == "unpaid")) +
   geom_hline(yintercept = 0, colour = "black", alpha = 0.5, linetype = "solid") +
   geom_hline(yintercept = 200000, colour = "black", alpha = 0.5, linetype = "dashed") +
-  scale_y_continuous(labels = comma, n.breaks = 10)
+  scale_y_continuous(labels = comma, n.breaks = 10, name = "amount(yen)")
 ggplotly(plot)
 
 # Add each-year column -----
