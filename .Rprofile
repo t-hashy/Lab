@@ -37,11 +37,19 @@ load.pkg <- function(pkg, install.only = FALSE, install.available = TRUE) {
 
 # Configuration and authenticatoin
 load.pkg("config", install.only = TRUE)
+conf <<- config::get()
 load.pkg("httpuv") # Authentiation
+load.pkg("devtools", install.only = TRUE) # Special installations
 
 
 # Google
 load.pkg("googlesheets4") # Google sheets
+if(!"googlesheets" %in% library()$results[,1]){
+  devtools::install_github("jennybc/googlesheets") # Edit sheets
+  library(googlesheets)
+}else if(!"googlesheets" %in% (.packages())){
+  library(googlesheets)
+}
 load.pkg("googledrive") # Google drive
 
 # Data manipulation

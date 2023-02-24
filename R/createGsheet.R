@@ -147,55 +147,74 @@ cash.now.pl <- df.years$cash.all[length(df.years$cash.all)]
 
 # Check the difference between pl and real amount
 cash.lack <- cash.now.pl - cash.now.account
+cash.diff <- cash.lack
 
-# Extract the substitution unpaid data
-df.unpaid <- df.years %>%
-  filter(
-    substitution_paid == FALSE,
-    way == "立替"
-  ) %>%
-  select(uid, date, name, amount) %>%
-  mutate(
-    cum.all = cumsum(amount)
-  ) %>%
-  group_by(name) %>%
-  mutate(
-    cum.each = cumsum(amount)
-  ) %>%
-  ungroup()
+# Extract the substitution unpaid or paid data
+df.target <- data.frame()
+if(cash.lack < 0){
+  df.target <- df.years %>%
+    filter(
+      substitution_paid == TRUE,
+      way == "立替"
+    ) %>%
+    select(uid, date, name, amount) %>%
+    mutate(
+      cum.all = order_by(desc(date) ,cumsum(amount))
+    ) %>%
+    group_by(name) %>%
+    mutate(
+      cum.each = order_by(desc(date), cumsum(amount))
+    ) %>%
+    ungroup()
+  cash.diff <- -cash.lack
+}else{
+  df.target <- df.years %>%
+    filter(
+      substitution_paid == FALSE,
+      way == "立替"
+    ) %>%
+    select(uid, date, name, amount) %>%
+    mutate(
+      cum.all = order_by(date, cumsum(amount))
+    ) %>%
+    group_by(name) %>%
+    mutate(
+      cum.each = order_by(date, cumsum(amount))
+    ) %>%
+    ungroup()
+}
 
 # Get the latest total unpaid amount -----
-unpaid.total <- max(df.unpaid$cum.all)
-names <- unique(df.unpaid$name)
-df.unpaid.check <- data.frame(
- name = names
-) %>%
-  mutate(
-    unpaid.amount = unlist(map(names, function(name.this) df.unpaid$cum.each[df.unpaid$name == name.this] %>% max))
+df.check <- df.target%>%
+  group_by(name) %>%
+  summarise(
+    total = sum(amount)
   ) %>%
   mutate(
-    unpaid.ratio = unlist(map(unpaid.amount, function(am) am / unpaid.total))
-  ) %>%
-  mutate(
-    to.fix = unlist(map(unpaid.ratio, function(am) ceiling(am * cash.lack)))
+    ratio = total/sum(.$total),
+    total.toFix = round( cash.diff*ratio)
   )
 
-# Detect where to fix with substitution paid
-df.toFix <- df.unpaid %>%
+# Detect where to fix with substitution paid ----
+df.toFix <- df.target %>%
   mutate(
     sub.toFix = unlist(map2(cum.each, name, function(cum.this = .x, name.this = .y){
-      if(cum.this <= df.unpaid.check$to.fix[df.unpaid.check$name == name.this]){
+      if(cum.this <= df.check$total.toFix[df.check$name == name.this]){
         return(TRUE)
       }else{
         return(FALSE)
       }
     }))
   )
+uids.toFix <- df.toFix$uid[df.toFix$sub.toFix == TRUE]
 
-# Fix the substitution paid
+# Fix the substitution paid ----
 df.fixed <- df.years %>%
   mutate(
-    substitution_paid = ifelse(uid %in% df.toFix$uid[df.toFix$sub.toFix == TRUE], TRUE, substitution_paid)
+    substitution_paid = case_when(
+      uid %in% uids.toFix ~ ifelse(cash.lack < 0, FALSE, TRUE),
+      TRUE ~ substitution_paid
+    )
   ) %>%
   mutate(
     pl.cal = ifelse(session != "Expenditure", amount, -amount)
@@ -304,6 +323,7 @@ ggplotly(plot)
 # Substitution data ----
 df.subs <- df.fixed.new %>%
   select(uid, date, session, amount, way, substitution_paid) %>%
+  .[order(.$date, .$session),] %>%
   mutate(
     isSub = ifelse(way == "立替", "sub", "others"),
     isPaid =ifelse(substitution_paid == TRUE, "paid", "others")
@@ -341,26 +361,35 @@ ggplotly(plot)
 # Add substitution_paid_at column with condition where the cash total not goes to negative ----
 
 # Set variables
-uids.paid <- df.subs$uid[df.subs$isPaid == "paid"]
-uids.others <- df.subs$uid[df.subs$isSub == "others"]
+uids.subs.paid <- df.subs$uid[df.subs$isPaid == "paid"]
+uids.pl.others <- df.subs$uid[df.subs$isSub == "others"]
 df.paid_at.added <- df.subs %>%
   ungroup() %>%
   mutate(
     substitution_paid_at = as.Date(NA)
   )
 
-# Check for each substitutinos; set these as after cummulative values goes positieve ----
-for(uid.this in uids.paid){
+# Check for each substitution; set these as after cumulative values goes positive ----
+for(uid.subs.paid.this in uids.subs.paid){
 
   # Set substitution to pay
-  cum.paid.this <- -df.paid_at.added$cum.along.with.sub[df.paid_at.added$uid == uid.this]
+  cum.subs.paid.this <- -df.paid_at.added$cum.along.with.sub[df.paid_at.added$uid == uid.subs.paid.this]
+  date.subs.paid.this <- df.paid_at.added$date[df.paid_at.added$uid == uid.subs.paid.this] %>%
+    as.Date()
 
   # Loop until payment goes over pl
-  for(uid.others in uids.others){
-    cum.this <- df.paid_at.added$cum.along.with.sub[df.paid_at.added$uid == uid.others]
-    if(cum.this > cum.paid.this) {
-      df.paid_at.added$substitution_paid_at[df.paid_at.added$uid == uid.this] <- df.paid_at.added$date[df.paid_at.added$uid == uid.others] %>%
-        as.Date()
+  for(uid.pl.others.this in uids.pl.others){
+    cum.pl.others.this <- df.paid_at.added$cum.along.with.sub[df.paid_at.added$uid == uid.pl.others.this]
+    date.pl.others.this <- df.paid_at.added$date[df.paid_at.added$uid == uid.pl.others.this] %>%
+      as.Date()
+    if((cum.pl.others.this > cum.subs.paid.this + 180000) && (date.pl.others.this >= date.subs.paid.this)) {
+      year.pl.others.this <- format(date.pl.others.this, "%Y") %>% as.numeric()
+      mon.pl.others.this <- format(date.pl.others.this, "%m") %>% as.numeric() + 1
+      if(mon.pl.others.this > 12){
+        mon.pl.others.this <- 1
+        year.pl.others.this <- year.pl.others.this + 1
+      }
+      df.paid_at.added$substitution_paid_at[df.paid_at.added$uid == uid.subs.paid.this] <- paste(year.pl.others.this, mon.pl.others.this, 1, sep = "-") %>% as.Date() -1
       break
     }
   }
@@ -373,19 +402,235 @@ plot <- ggplot(df.paid_at.added) +
   geom_hline(yintercept = 0, alpha = 0.5)
 ggplotly(plot)
 
-# Shape up the data -----------
-df.shaped <- df.paid_at.added %>%
+
+
+
+### SHAPE UP THE WHOLE DATA ### ----
+# Update the substitution paid --------
+sht.raw <- read_sheet(conf$G_SSID_PL, conf$G_SHTNAME_PL)
+sht.added <- sht.raw %>%
+  mutate(rownum = row_number() + 1)
+col.chr <- index(colnames(sht.raw)) %>% .[colnames(sht.raw) == "substitution-paied"] %>%
+  LETTERS[.]
+df.replaced <- data.frame()
+replaceTo <- data.frame(
+  substitution_paid = ifelse(cash.lack < 0, FALSE, TRUE)
+)
+for(uid.this in uids.toFix){
+
+  # Get the data
+  data.this <- df.fixed[df.fixed$uid == uid.this,]
+
+  # Find the row
+  row <- sht.added %>%
+    filter(
+      date == data.this$date,
+      amount == data.this$amount,
+      name == data.this$name,
+      pl == data.this$session,
+      `pl-payment-way` == data.this$way,
+      `pl-category` == data.this$category,
+      `pl-detail` == data.this$details,
+      `target` == data.this$target,
+      `pl-purpose`== data.this$purpose,
+      `ex-type` == data.this$type
+    ) %>%
+    .[1,]
+
+  if(row$`substitution-paied` != replaceTo[1,1]){
+
+    # Overwrite the sheet
+    row.num <- row$rownum
+    range_write(
+      ss = conf$G_SSID_PL,
+      data = replaceTo,
+      sheet = conf$G_SHTNAME_PL,
+      range = paste(col.chr, row.num, sep = ""),
+      col_names = FALSE
+    )
+
+    # Add to replaced
+    sheet_append(conf$G_SSID_PL, row %>% mutate(updated_at = Sys.time()) %>% select(!rownum), "Fixed")
+  }
+}
+
+# Shape the all-time data -----------
+
+# Set a basic array
+df.shaped.base <- df.paid_at.added %>%
   mutate(
-    date_paid.at = ifelse(substitution_paid == FALSE, date, substitution_paid_at) %>% as.Date(),
+    date_paidat = ifelse(substitution_paid == FALSE, date, substitution_paid_at) %>% as.Date(),
     .after = date
   ) %>%
-  select(!c(isPaid, isSub, cum.with.sub, cum.along.with.sub, pl, cum)) %>%
-  order_by(order(date),)
+  select(uid, date, date_paidat, session, amount, way, substitution_paid) %>%
+  merge.data.frame(df.years %>% select(uid,name, category, details, target, purpose, type), all.x = TRUE) %>%
+  select(uid,date, date_paidat, session, amount, details, way, category, target, purpose, type, name, substitution_paid) %>%
+  .[order(.$date, .$date_paidat, .$session, .$purpose, .$type, .$category),]
+
+# Shape the all
+df.shaped <- df.shaped.base %>%
   mutate(
-    amount.cal = ifelse(session == "Expenditure", -amount, amount),
+    cal.amount.pl = ifelse(session == "Expenditure", -amount, amount),
+    pl_total =  order_by(date, cumsum(cal.amount.pl)),
     .after = amount
   ) %>%
   mutate(
-    pl.total = cumsum(amount.cal),
-    .after = amount
+    isPaid = case_when(
+      way != "立替"　~ "paid",
+      substitution_paid == TRUE ~ "paid",
+      TRUE ~ "unpaid"
+    )
+  ) %>%
+  group_by(isPaid) %>%
+  mutate(
+    cash_total = order_by(date_paidat, cumsum(cal.amount.pl)),
+    .after = pl_total
+  ) %>%
+  group_by(isPaid, name) %>%
+  mutate(
+    unpaid_each = ifelse(isPaid == "unpaid", order_by(date, cumsum(cal.amount.pl)), NA),
+    .after = cash_total
+  ) %>%
+  ungroup()
+
+# See the data ----
+plot <- ggplot(df.shaped)+
+  geom_line(aes(date, pl_total, colour = "pl")) +
+  geom_line(aes(date_paidat, cash_total, colour = isPaid)) +
+  geom_line(aes(date, unpaid_each , colour = paste("unpaid", name)), na.rm = TRUE, data = df.shaped %>% filter(isPaid == "unpaid")) +
+  geom_hline(yintercept = 0, colour = "black", alpha = 0.5, linetype = "solid") +
+  geom_hline(yintercept = 200000, colour = "black", alpha = 0.5, linetype = "dashed") +
+  scale_y_continuous(labels = comma, n.breaks = 10)
+ggplotly(plot)
+
+# Add each-year column -----
+
+# Add column
+df.shaped.year <- df.shaped %>%
+  mutate(
+    year = format(date, "%Y"),
+    year_paidat = format(date_paidat, "%Y"),
+    mon = format(date, "%m") %>% as.numeric(),
+    mon_paidat = format(date_paidat, "%m") %>% as.numeric(),
+    .after = date_paidat
+  ) %>%
+  group_by(year) %>%
+  mutate(
+    pl_year = order_by(date, cumsum(cal.amount.pl)),
+    .after = pl_total
+  ) %>%
+  ungroup() %>%
+  group_by(isPaid, year_paidat) %>%
+  mutate(
+    cash_year = order_by(date_paidat, cumsum(cal.amount.pl)),
+    .after = cash_total
+  ) %>%
+  ungroup()
+
+# See the data -----
+plot <- ggplot(df.shaped.year) +
+  geom_line(aes(mon, pl_year, colour = paste("pl", year))) +
+  geom_line(aes(mon_paidat, cash_year, colour = paste("cash", isPaid, year_paidat))) +
+  geom_hline(yintercept = 0, colour = "black", alpha = 0.5, linetype = "solid") +
+  geom_hline(yintercept = 200000, colour = "black", alpha = 0.5, linetype = "dashed") +
+  scale_y_continuous(labels = comma, n.breaks = 10) +
+  scale_x_continuous(labels = label_number(accuracy = 1), limits = c(1,12))
+ggplotly(plot)
+
+##
+# Add yearmonth column -----
+
+# Add column
+df.shaped.ym <- df.shaped.year %>%
+  mutate(
+    yearmon = as.yearmon(date),
+    yearmon_paidat = as.yearmon(date_paidat),
+    day = format(date, "%d") %>% as.numeric(),
+    day_paidat = format(date_paidat, "%d") %>% as.numeric(),
+    .after = mon_paidat
+  ) %>%
+  group_by(yearmon) %>%
+  mutate(
+    pl_yearmon = order_by(date, cumsum(cal.amount.pl)),
+    .after = pl_total
+  ) %>%
+  ungroup() %>%
+  group_by(isPaid, yearmon_paidat) %>%
+  mutate(
+    cash_yearmon = order_by(date_paidat, cumsum(cal.amount.pl)),
+    .after = cash_total
+  ) %>%
+  ungroup()
+##
+
+
+### FINIAL PUSH ### ----
+
+# Format the sheet ----
+df.formatted <- df.shaped.ym %>%
+  select(
+    uid,
+    session,
+    details,
+    way,
+    category,
+    target,
+    purpose,
+    type,
+    name,
+    date,
+    date_paidat,
+    year,
+    year_paidat,
+    yearmon,
+    yearmon_paidat,
+    mon,
+    mon_paidat,
+    day,
+    day_paidat,
+    amount,
+    pl_total,
+    pl_year,
+    pl_yearmon,
+    cash_total,
+    cash_year,
+    cash_yearmon,
+    unpaid_each,
+    substitution_paid,
+    isPaid
+  ) %>%
+  .[order(.$date, .$session, .$date_paidat),]
+
+# Write tables of each year ----
+years <- unique(df.formatted$year)
+for(year.this in years){
+
+  # Extract and add column
+  df.this <- df.formatted %>%
+    filter(
+      year == year.this
+    ) %>%
+    mutate(
+      yearmon = as.Date(yearmon),
+      yearmon_paidat = as.Date(yearmon_paidat)
+    ) %>%
+    write_sheet(conf$G_SSID_PERF, year.this)
+}
+
+# Update all time sheet -----
+df.formatted.toSave <- df.formatted %>%
+  mutate(
+    yearmon = as.Date(yearmon),
+    yearmon_paidat = as.Date(yearmon_paidat)
   )
+allsht.old <- sheet_names(conf$G_SSID_PERF) %>%
+  grep("all", ., ignore.case = TRUE, value = TRUE)
+allsht.new <- paste("all_at", format(Sys.Date(), "%Y%m%d"), sep = "")
+sheet_rename(conf$G_SSID_PERF, allsht.old, allsht.new)
+write_sheet(df.formatted.toSave, conf$G_SSID_PERF, allsht.new)
+
+
+
+
+### Open the sheet ### ----------
+gs4_browse(conf$G_SSID_PERF)
